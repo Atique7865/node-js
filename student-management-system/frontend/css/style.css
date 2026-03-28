@@ -1,0 +1,46 @@
+/* ── Global ── */
+body {
+  background-color: #f0f2f5;
+  font-family: 'Segoe UI', sans-serif;
+}
+
+/* ── Navbar ── */
+.navbar { box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+
+/* ── Stat cards ── */
+.stat-card { transition: transform .2s; border-radius: 12px; }
+.stat-card:hover { transform: translateY(-3px); }
+.stat-icon {
+  width: 56px; height: 56px;
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ── Table card ── */
+.card { border-radius: 12px; }
+.table thead th {
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #6c757d;
+  border-bottom: 2px solid #dee2e6;
+}
+.table tbody tr:hover { background: #f8f9ff; }
+
+/* ── Grade badges ── */
+.badge-grade {
+  font-size: .8rem;
+  padding: .35em .65em;
+  border-radius: 8px;
+}
+
+/* ── Action buttons ── */
+.btn-action {
+  padding: .25rem .55rem;
+  font-size: .85rem;
+  border-radius: 8px;
+}
+
+/* ── Alert ── */
+#alertArea .alert { border-radius: 10px; }
