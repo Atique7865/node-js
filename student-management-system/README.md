@@ -134,6 +134,62 @@ location /api/ {
 
 ---
 
+## ⚠️ Important: Using the Backend Container Name for Communication
+
+> **When running with Docker, the frontend CANNOT use `localhost` to reach the backend.**
+> It must use the **backend container name** (or service name) as the hostname.
+
+### Why?
+
+Each container has its own isolated network namespace. Inside the `frontend` container, `localhost` refers to Nginx itself — **not** the backend. Docker provides an internal DNS that resolves container/service names to their internal IP addresses automatically.
+
+### How it works
+
+| Context | Correct hostname to use | Why |
+|---|---|---|
+| **Running locally** (no Docker) | `localhost` | Everything runs on the same machine |
+| **Running with Docker Compose** | `backend` (service name) | Docker DNS resolves the service name |
+| **Running containers manually** | `sms_backend` (container `--name`) | Docker DNS resolves the container name |
+
+### In `frontend/nginx.conf`
+
+```nginx
+location /api/ {
+    proxy_pass http://backend:3000;
+    #                 ↑
+    #    This MUST be the backend service/container name — NOT "localhost"
+    #    Docker's internal DNS resolves "backend" → backend container's IP
+}
+```
+
+### In `docker-compose.yml` (service name = `backend`)
+
+```yaml
+services:
+  backend:          # ← this name becomes the hostname inside the Docker network
+    build: ./backend
+    ...
+  frontend:
+    build: ./frontend
+    ...
+```
+
+### Running containers manually (`--name` flag)
+
+When running without Compose, the `--name` you give the container becomes its DNS hostname on the shared network:
+
+```bash
+# Backend is named "sms_backend"
+docker run -d --name sms_backend --network sms-network ... sms-backend:latest
+
+# So nginx.conf must proxy to "sms_backend", not "localhost"
+proxy_pass http://sms_backend:3000;
+```
+
+> 💡 **Rule of thumb:** Whatever name appears after `--name` (manual) or as the service key in `docker-compose.yml` is the hostname you use in `nginx.conf`.
+
+---
+
 # 🖥️ PART 1: Run Locally (Without Docker)
 
 ## Prerequisites
