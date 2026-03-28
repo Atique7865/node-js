@@ -1,10 +1,37 @@
 version: '3.9'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 3-Tier Student Management System
+#
+# ARCHITECTURE:
+#
+#   [Browser]
+#       │  HTTP :80
+#       ▼
+#   ┌─────────────┐       /api/* proxy      ┌──────────────────┐
+#   │  frontend   │ ─────────────────────▶  │    backend       │
+#   │  (Nginx)    │                         │  (Node/Express)  │
+#   │  port 80    │                         │   port 3000      │
+#   └─────────────┘                         └──────────────────┘
+#                                                    │ SQL
+#                                                    ▼
+#                                           ┌──────────────────┐
+#                                           │       db         │
+#                                           │  (PostgreSQL)    │
+#                                           │   port 5432      │
+#                                           └──────────────────┘
+#
+# Each service has its OWN Dockerfile:
+#   frontend  →  frontend/Dockerfile   (Nginx)
+#   backend   →  backend/Dockerfile    (Node.js)
+#   db        →  official postgres image (no Dockerfile needed)
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
 
-  # ── Tier 3: Database ──────────────────────────────────────
+  # ── Tier 3: Database ──────────────────────────────────────────────────────
   db:
-    image: postgres:16-alpine
+    image: postgres:16-alpine          # official image, no custom Dockerfile needed
     container_name: sms_db
     restart: unless-stopped
     environment:
@@ -12,36 +39,51 @@ services:
       POSTGRES_USER:     postgres
       POSTGRES_PASSWORD: secret123
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pgdata:/var/lib/postgresql/data                          # persist data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql # auto-run on first start
     ports:
-      - "5432:5432"
+      - "5432:5432"       # expose so you can connect with pgAdmin / psql on host
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── Tier 2: Backend / Application ────────────────────────
+  # ── Tier 2: Backend (Node.js + Express) ───────────────────────────────────
   backend:
     build:
-      context: .
+      context: ./backend        # Docker looks for backend/Dockerfile
       dockerfile: Dockerfile
     container_name: sms_backend
     restart: unless-stopped
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_healthy   # wait until PostgreSQL is ready
     environment:
       PORT:        3000
       NODE_ENV:    production
-      DB_HOST:     db
+      DB_HOST:     db               # "db" = service name above, Docker DNS resolves it
       DB_PORT:     5432
       DB_NAME:     student_management
       DB_USER:     postgres
       DB_PASSWORD: secret123
+    # Port 3000 is NOT exposed to the host — only the frontend container
+    # needs to reach it (via Docker's internal network).
+    # Uncomment the line below ONLY if you want direct API access from your machine:
+    # ports:
+    #   - "3000:3000"
+
+  # ── Tier 1: Frontend (Nginx static server + API reverse proxy) ────────────
+  frontend:
+    build:
+      context: ./frontend       # Docker looks for frontend/Dockerfile
+      dockerfile: Dockerfile
+    container_name: sms_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend                 # backend must be up before frontend starts
     ports:
-      - "3000:3000"
+      - "80:80"                 # open browser at http://localhost
 
 volumes:
-  pgdata:
+  pgdata:     # named volume — PostgreSQL data persists across container restarts

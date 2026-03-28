@@ -6,7 +6,7 @@ A full-stack **Student Management System** built with a classic 3-tier architect
 
 | Tier                      | Technology                       | Responsibility                          |
 | ------------------------- | -------------------------------- | --------------------------------------- |
-| **Tier 1 – Presentation** | HTML5 + Bootstrap 5 + Vanilla JS | User interface (served as static files) |
+| **Tier 1 – Presentation** | HTML5 + Bootstrap 5 + Vanilla JS | User interface served by Nginx          |
 | **Tier 2 – Application**  | Node.js + Express.js REST API    | Business logic, routing, validation     |
 | **Tier 3 – Data**         | PostgreSQL                       | Persistent data storage                 |
 
@@ -17,7 +17,7 @@ A full-stack **Student Management System** built with a classic 3-tier architect
 * ✅ Responsive UI with Bootstrap 5
 * ✅ REST API with proper HTTP status codes
 * ✅ Input validation on both frontend and backend
-* ✅ Dockerized with multi-stage build
+* ✅ **Separate Dockerfile for Frontend (Nginx) and Backend (Node.js)**
 
 ---
 
@@ -26,32 +26,115 @@ A full-stack **Student Management System** built with a classic 3-tier architect
 ```
 student-management-system/
 ├── backend/
-│   ├── src/
-│   │   ├── config/
-│   │   │   └── db.js                 # PostgreSQL connection pool
-│   │   ├── controllers/
-│   │   │   └── studentController.js  # Request handlers
-│   │   ├── models/
-│   │   │   └── studentModel.js       # SQL queries
-│   │   ├── routes/
-│   │   │   └── studentRoutes.js      # API route definitions
-│   │   └── app.js                     # Express app entry point
+│   ├── Dockerfile                    ← 🐳 Backend Docker image (Node.js)
 │   ├── package.json
-│   └── .env.example
+│   └── src/
+│       ├── config/db.js              # PostgreSQL connection pool
+│       ├── controllers/studentController.js
+│       ├── models/studentModel.js
+│       ├── routes/studentRoutes.js
+│       └── server.js                 # Express app entry point
 ├── frontend/
-│   ├── index.html                    # Single-page UI
+│   ├── Dockerfile                    ← 🐳 Frontend Docker image (Nginx)
+│   ├── nginx.conf                    # Nginx config: serve files + proxy /api/*
+│   ├── index.html
 │   ├── css/style.css
-│   └── js/app.js                     # Fetch API + DOM logic
+│   └── js/app.js
 ├── database/
 │   └── init.sql                      # Table schema + seed data
-├── Dockerfile                        # Multi-stage Docker build
-├── docker-compose.yml                # Full-stack compose file
+├── docker-compose.yml                # Orchestrates all 3 containers together
 └── .dockerignore
 ```
 
 ---
 
-# 🖥️ PART 1: Run Locally on Ubuntu (Without Docker)
+## 🐳 Docker Architecture Explained
+
+This project uses **3 separate containers**, each with its own role:
+
+```
+Your Browser
+     │
+     │  http://localhost (port 80)
+     ▼
+┌──────────────────────────┐
+│   frontend container     │  ← built from  frontend/Dockerfile
+│   Image: Nginx           │
+│   Serves: HTML/CSS/JS    │
+│   Also proxies /api/*  ──┼──────────────────────────────┐
+└──────────────────────────┘                              │
+                                                          │ internal Docker network
+                                                          ▼
+                                         ┌────────────────────────────┐
+                                         │   backend container        │  ← built from backend/Dockerfile
+                                         │   Image: Node.js + Express │
+                                         │   Port: 3000 (internal)    │
+                                         └────────────────┬───────────┘
+                                                          │ SQL queries
+                                                          ▼
+                                         ┌────────────────────────────┐
+                                         │   db container             │
+                                         │   Image: postgres:16-alpine│
+                                         │   Port: 5432               │
+                                         └────────────────────────────┘
+```
+
+### Why separate Dockerfiles?
+
+| File                    | Base Image        | What it contains                              |
+| ----------------------- | ----------------- | --------------------------------------------- |
+| `backend/Dockerfile`    | `node:20-alpine`  | Node.js runtime + Express app source code     |
+| `frontend/Dockerfile`   | `nginx:stable-alpine` | Nginx server + HTML/CSS/JS static files   |
+
+Each container does **one job only** — this is the microservices principle.
+
+---
+
+## 🔍 Understanding Each Dockerfile
+
+### `backend/Dockerfile` — Node.js API Server
+
+```
+Stage 1 (deps):   Install npm packages
+Stage 2 (final):  Copy app source + node_modules → run Node.js
+```
+
+Key concepts:
+- **Multi-stage build** — Stage 1 installs packages, Stage 2 is the lean final image
+- **Non-root user** — runs as `appuser` for security
+- **HEALTHCHECK** — Docker auto-checks if the API is responding
+
+### `frontend/Dockerfile` — Nginx Static Server
+
+```
+Step 1: Start from nginx:stable-alpine
+Step 2: Copy nginx.conf  (custom routing rules)
+Step 3: Copy HTML/CSS/JS files into Nginx web root
+Step 4: Start Nginx
+```
+
+Key concepts:
+- **No build step needed** — frontend is plain HTML/CSS/JS
+- **Reverse proxy** — Nginx forwards `/api/*` requests to the backend container
+- The browser only talks to port 80 (Nginx), never directly to Node.js
+
+### `frontend/nginx.conf` — How the Proxy Works
+
+```nginx
+location / {
+    # Serve static HTML/CSS/JS files
+}
+
+location /api/ {
+    proxy_pass http://backend:3000;
+    # "backend" = service name in docker-compose.yml
+    # Docker's DNS resolves it to the backend container's IP automatically
+}
+```
+
+---
+
+# 🖥️ PART 1: Run Locally (Without Docker)
 
 ## Prerequisites
 
@@ -84,7 +167,7 @@ sudo systemctl status postgresql
 
 ## Database Setup
 
-### Step 4 — Create the database and user
+### Step 4 — Create the database
 
 ```bash
 sudo -i -u postgres
@@ -96,21 +179,16 @@ Inside `psql`:
 ```sql
 CREATE DATABASE student_management;
 ALTER USER postgres WITH PASSWORD 'yourpassword';
-\l  -- verify database
+\l     -- verify database exists
 \q
 exit
 ```
 
-### Step 5 — Run the database init script
+### Step 5 — Run the init script
 
 ```bash
-cd ~/node-js/student-management-system
+cd student-management-system
 psql -U postgres -d student_management -f database/init.sql
-```
-
-Verify seed data:
-
-```bash
 psql -U postgres -d student_management -c "SELECT * FROM students;"
 ```
 
@@ -118,10 +196,10 @@ psql -U postgres -d student_management -c "SELECT * FROM students;"
 
 ## Run the Backend
 
-### Step 6 — Install Node.js dependencies
+### Step 6 — Install dependencies
 
 ```bash
-cd ~/node-js/student-management-system/backend
+cd backend
 npm install
 ```
 
@@ -132,12 +210,11 @@ cp .env.example .env
 nano .env
 ```
 
-Set the contents:
+Set:
 
 ```
 PORT=3000
 NODE_ENV=development
-
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=student_management
@@ -145,27 +222,20 @@ DB_USER=postgres
 DB_PASSWORD=yourpassword
 ```
 
-> Make sure the DB credentials match what you created earlier.
-
-Save and exit (`Ctrl+X`, `Y`, `Enter`).
-
 ### Step 8 — Start the server
 
 ```bash
-npm start   # runs backend/app.js
+npm start
 ```
 
-You should see:
+Expected output:
 
 ```
 ✅ Connected to PostgreSQL database
 🚀 Server running on http://localhost:3000
-📋 API base URL : http://localhost:3000/api/students
-💊 Health check : http://localhost:3000/api/health
-🌐 Frontend     : http://localhost:3000
 ```
 
-Open in browser: `http://localhost:3000`
+Open browser: `http://localhost:3000`
 
 ---
 
@@ -174,19 +244,16 @@ Open in browser: `http://localhost:3000`
 ```bash
 curl http://localhost:3000/api/health
 curl http://localhost:3000/api/students
-curl "http://localhost:3000/api/students?search=Alice"
 curl -X POST http://localhost:3000/api/students \
   -H "Content-Type: application/json" \
   -d '{"first_name":"Tom","last_name":"Hanks","email":"tom@example.com","subject":"Drama","grade":"A"}'
-curl -X PUT http://localhost:3000/api/students/1 \
-  -H "Content-Type: application/json" \
-  -d '{"first_name":"Tom","last_name":"Hanks","grade":"A+"}'
-curl -X DELETE http://localhost:3000/api/students/1
 ```
 
 ---
 
-# 🐳 PART 2: Run with Docker
+# 🐳 PART 2: Run with Docker Compose (Recommended)
+
+This is the easiest way to run all 3 tiers together.
 
 ### Step 1 — Install Docker
 
@@ -196,21 +263,73 @@ sudo apt install -y docker.io docker-compose
 sudo systemctl enable --now docker
 sudo usermod -aG docker $USER
 newgrp docker
-docker --version
-docker compose version
 ```
 
 ---
 
-### Step 2 — Create Docker network
+### Step 2 — Build and start all containers
+
+```bash
+cd student-management-system
+docker compose up --build
+```
+
+What this does step by step:
+1. Builds `backend` image from `backend/Dockerfile`
+2. Builds `frontend` image from `frontend/Dockerfile`
+3. Pulls `postgres:16-alpine` image for `db`
+4. Starts all 3 containers in the right order (`db` → `backend` → `frontend`)
+
+---
+
+### Step 3 — Open the application
+
+```
+http://localhost
+```
+
+> Port 80 (Nginx) → proxy → Port 3000 (Node.js) → SQL → PostgreSQL
+
+---
+
+### Step 4 — Useful Docker commands
+
+```bash
+# See running containers
+docker compose ps
+
+# See logs for all containers
+docker compose logs
+
+# See logs for one container only
+docker compose logs backend
+docker compose logs frontend
+docker compose logs db
+
+# Stop all containers
+docker compose down
+
+# Stop and delete data (fresh start)
+docker compose down -v
+```
+
+---
+
+# 🐳 PART 3: Run Containers Manually (without Compose)
+
+This shows you exactly what docker-compose does under the hood — great for learning!
+
+### Step 1 — Create a shared Docker network
 
 ```bash
 docker network create sms-network
 ```
 
+> Without a network, containers cannot talk to each other by name.
+
 ---
 
-### Step 3 — Run PostgreSQL container
+### Step 2 — Start the database container
 
 ```bash
 docker run -d \
@@ -224,35 +343,22 @@ docker run -d \
   postgres:16-alpine
 ```
 
-Verify:
-
-```bash
-docker logs sms_db
-```
-
----
-
-### Step 4 — Load database schema
+Wait ~5 seconds, then load the schema:
 
 ```bash
 docker cp database/init.sql sms_db:/init.sql
 docker exec -it sms_db psql -U postgres -d student_management -f /init.sql
-docker exec -it sms_db psql -U postgres -d student_management -c "SELECT id, first_name, last_name FROM students;"
 ```
 
 ---
 
-### Step 5 — Build backend Docker image
+### Step 3 — Build and run the backend container
 
 ```bash
-docker build -t sms-backend:latest .
-```
+# Build the image using backend/Dockerfile
+docker build -t sms-backend:latest ./backend
 
----
-
-### Step 6 — Run backend container
-
-```bash
+# Run the backend container
 docker run -d \
   --name sms_backend \
   --network sms-network \
@@ -263,46 +369,78 @@ docker run -d \
   -e DB_NAME=student_management \
   -e DB_USER=postgres \
   -e DB_PASSWORD=secret123 \
-  -p 3000:3000 \
   sms-backend:latest
 ```
 
-> DB_HOST=sms_db — container name inside network, not localhost
+> `DB_HOST=sms_db` — the container name acts as a DNS hostname inside the network.
 
 ---
 
-### Step 7 — Verify containers
+### Step 4 — Build and run the frontend container
+
+```bash
+# Build the image using frontend/Dockerfile
+docker build -t sms-frontend:latest ./frontend
+
+# Run the frontend container
+docker run -d \
+  --name sms_frontend \
+  --network sms-network \
+  -p 80:80 \
+  sms-frontend:latest
+```
+
+> Nginx will proxy `/api/*` to `http://backend:3000` inside the Docker network.
+
+---
+
+### Step 5 — Verify all containers are running
 
 ```bash
 docker ps
-docker logs sms_backend
+```
+
+Expected output:
+
+```
+CONTAINER ID   IMAGE                  PORTS                  NAMES
+xxxxxxxxxxxx   sms-frontend:latest    0.0.0.0:80->80/tcp     sms_frontend
+xxxxxxxxxxxx   sms-backend:latest     3000/tcp               sms_backend
+xxxxxxxxxxxx   postgres:16-alpine     0.0.0.0:5432->5432/tcp sms_db
 ```
 
 ---
 
-### Step 8 — Open application
+### Step 6 — Open the application
 
 ```
-http://localhost:3000
+http://localhost
 ```
 
 ---
 
 # 🔧 Troubleshooting
 
-| Problem                  | Solution                                                                            |
-| ------------------------ | ----------------------------------------------------------------------------------- |
-| `ECONNREFUSED`           | PostgreSQL not running → `sudo systemctl start postgresql` or `docker start sms_db` |
-| Port 3000/5432 in use    | `sudo lsof -i :3000` → kill PID / stop other DB                                     |
-| Password auth failed     | `.env` must match DB user password                                                  |
-| Frontend not loading     | Make sure server runs from `backend/` directory                                     |
-| Docker permission denied | `sudo usermod -aG docker $USER && newgrp docker`                                    |
+| Problem                         | Solution                                                                     |
+| ------------------------------- | ---------------------------------------------------------------------------- |
+| `ECONNREFUSED` on backend start | PostgreSQL not ready yet — wait and retry, or use `depends_on` in compose    |
+| Port 80 already in use          | `sudo lsof -i :80` → stop Apache/other nginx                                 |
+| Port 5432 already in use        | Local PostgreSQL running — `sudo systemctl stop postgresql`                  |
+| Frontend shows blank page       | Check `docker compose logs frontend` for nginx errors                        |
+| API calls return 502 Bad Gateway| Backend not running — check `docker compose logs backend`                    |
+| Password auth failed            | `.env` must match the `POSTGRES_PASSWORD` used when creating the container   |
+| Docker permission denied        | `sudo usermod -aG docker $USER && newgrp docker`                             |
 
 ---
 
-This README now matches **your working setup**:
+# 📚 What You Learned
 
-* Node.js app starts via `backend/app.js`
-* `.env` explained and required
-* PostgreSQL authentication fixed
-* Docker instructions updated for network/container-based DB
+By building this project you practised:
+
+- ✅ **Separate Dockerfiles** — one per service (frontend, backend)
+- ✅ **Multi-stage builds** — keeping the Node.js image small
+- ✅ **Nginx as reverse proxy** — routing `/api/*` to the backend
+- ✅ **Docker Compose** — orchestrating multiple containers
+- ✅ **Docker networking** — containers talking by service name
+- ✅ **Health checks** — Docker knowing when a service is truly ready
+- ✅ **Named volumes** — persisting database data across restarts
