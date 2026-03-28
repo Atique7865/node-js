@@ -432,6 +432,9 @@ docker run -d \
 
 ---
 
+###############
+after creating the backend container I must have to change nginx.conf file where I have to must add  http://sms_backend:3000; same as backend container name
+
 ### Step 4 — Build and run the frontend container
 
 ```bash
